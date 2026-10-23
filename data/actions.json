@@ -1,0 +1,88 @@
+{
+  "_说明": [
+    "预设动作表：发「/do 动作名」时直接执行 command，不经过 AI，所以很快（3秒内）。",
+    "  name    ：动作名，用户会这样叫它",
+    "  aliases ：别名，可以写多个",
+    "  command ：实际执行的 PowerShell 命令",
+    "  desc    ：一句话说明",
+    "  danger  ：true 表示有风险（比如关程序、锁屏），执行前会先确认",
+    "",
+    "匹配不上任何动作时，会自动回落到 DSH 模式（AI 现场处理，较慢但灵活）。"
+  ],
+  "actions": [
+    {
+      "name": "打开抖音",
+      "aliases": [
+        "开抖音",
+        "抖音"
+      ],
+      "command": "Start-Process -FilePath 'D:\\Apps\\douyin\\douyin.exe' -WorkingDirectory 'D:\\Apps\\douyin'",
+      "desc": "启动抖音客户端"
+    },
+    {
+      "name": "打开微信",
+      "aliases": [
+        "开微信",
+        "微信"
+      ],
+      "command": "Start-Process -FilePath 'C:\\Program Files\\Tencent\\WeChat\\WeChat.exe'",
+      "desc": "启动微信"
+    },
+    {
+      "name": "查磁盘空间",
+      "aliases": [
+        "看空间",
+        "剩余空间",
+        "磁盘空间",
+        "C盘空间"
+      ],
+      "command": "Get-PSDrive C,D,E,F -ErrorAction SilentlyContinue | Select-Object Name,@{n='已用GB';e={[math]::Round($_.Used/1GB,1)}},@{n='剩余GB';e={[math]::Round($_.Free/1GB,1)}} | Format-Table -AutoSize | Out-String",
+      "desc": "列出各磁盘的已用和剩余空间"
+    },
+    {
+      "name": "查进程",
+      "aliases": [
+        "看进程",
+        "进程占用"
+      ],
+      "command": "Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object -First 10 Name,@{n='内存MB';e={[math]::Round($_.WorkingSet64/1MB)}} | Format-Table -AutoSize | Out-String",
+      "desc": "列出内存占用前 10 的进程"
+    },
+    {
+      "name": "锁屏",
+      "aliases": [
+        "锁电脑"
+      ],
+      "command": "rundll32.exe user32.dll,LockWorkStation",
+      "desc": "锁定电脑屏幕",
+      "danger": true
+    },
+    {
+      "name": "打开记事本",
+      "aliases": [
+        "记事本",
+        "开记事本"
+      ],
+      "command": "Start-Process notepad.exe",
+      "desc": "打开记事本"
+    },
+    {
+      "name": "打开浏览器",
+      "aliases": [
+        "开浏览器",
+        "浏览器"
+      ],
+      "command": "Start-Process msedge.exe -ErrorAction SilentlyContinue; if (-not $?) { Start-Process 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe' }",
+      "desc": "打开 Edge 浏览器"
+    },
+    {
+      "name": "看时间",
+      "aliases": [
+        "现在几点",
+        "时间"
+      ],
+      "command": "Get-Date -Format 'yyyy年MM月dd日 HH:mm:ss dddd'",
+      "desc": "显示当前时间"
+    }
+  ]
+}

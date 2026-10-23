@@ -1,0 +1,45 @@
+# ── 运行时数据（绝对不能提交）────────────────────────────────
+data/*
+!data/actions.json
+!data/config.example.json
+
+# 登录凭证 / API Key
+data/credentials.json
+data/apikey.txt
+data/.credentials.yaml
+*.key
+
+# 崩溃恢复
+data/bridge.pid
+data/run.log
+data/window-probe.jsonl
+data/busy-state.json
+data/mood-state.json
+data/proactive-history.json
+
+# 备份
+data/_backup-*/
+*.bak
+*.bak-*
+
+# ── Node ────────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+pnpm-debug.log*
+.npm/
+.pnpm-store/
+
+# ── 系统 ────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log
+
+# ── 编辑器 ──────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+
+# ── 本地人设迭代（各人自己留底，不入库）────────────────────
+personas/*-backup*.md
+personas/*备份*.md

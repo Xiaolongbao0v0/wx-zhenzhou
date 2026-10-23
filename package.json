@@ -1,0 +1,13 @@
+{
+  "name": "wx-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "微信 iLink Bot <-> DSH 桥接。协议逆向自 wechaty-puppet-claw-wechat 源码，零外部依赖。",
+  "scripts": {
+    "start": "node src/index.js",
+    "echo": "node src/index.js --mode=echo",
+    "logout": "node src/index.js --logout"
+  },
+  "engines": { "node": ">=18" }
+}
