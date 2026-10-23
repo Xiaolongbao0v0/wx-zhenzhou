@@ -893,9 +893,12 @@ async function handleWithDsh(state, msg, text) {
     // 人设里的比例要求实测执行不稳定（颜文字 24%、emoji 3%），靠代码保底。
     // 这一轮已经要发图了就不补 —— 三选一只留一个。
     if (!stickerNames.length) {
+      // 把「他说的那句」也传给情绪判断：
+      // 否则「他被人骂了」这种场景，只看她回的「谁。骂了什么」会判成愤怒，emoji 配成 😒。
       ensureEmoji(finalBubbles, {
-        kaomojiChance: state.cfg.kaomojiChance ?? 0.65,
-        emojiChance: state.cfg.emojiChance ?? 0.35
+        kaomojiChance: state.cfg.kaomojiChance ?? 0,
+        emojiChance: state.cfg.emojiChance ?? 0.4,
+        userText: text
       });
     }
 

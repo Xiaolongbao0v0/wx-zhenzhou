@@ -316,7 +316,7 @@ export function humanDelayMs(text, opts = {}) {
 // 补的时候按情绪分组挑，对方难过时不会贴大笑颜文字。
 
 const KAOMOJI_BY_MOOD = {
-  happy: ['(＾▽＾)', '(◍・ᴗ・◍)', '(*´▽`*)', '(๑˃̵ᴗ˂̵)', '(｡・̀ᴗ-)✧', '٩(◕‿◕｡)۶', 'o(≧▽≦)o', '(●´ω`●)'],
+  happy: ['(＾▽＾)', '(◍・ᴗ・◍)', '(*´▽`*)', '(๑˃̵ᴗ˂̵)', '(｡・̀ᴗ-)✧', '٩(◕‿◕｡)۶', 'o(≧▽≦)o', '(●´ω`●)', '(≧▽≦)', '(๑•̀ㅂ•́)و✧'],
   shy: ['(๑´ω`๑)', '(*/ω＼*)', '(´｡・ᵕ・｡`)', '(￣▽￣*)ゞ'],
   sad: ['(´；ω；`)', '(｡•́︿•̀｡)', '(๑•́ ₃ •̀๑)', '(｡╥﹏╥｡)'],
   tired: ['(´-ω-`)', '(￣o￣) z z Z', '( ˘ω˘ )', '(∪.∪ )...zzz'],
@@ -327,15 +327,17 @@ const KAOMOJI_BY_MOOD = {
   angry: ['(￣^￣)', '(¬_¬)', '(￣ー￣)', '(・_・;)', '(；￣Д￣)']
 };
 
+// 全部用 Unicode emoji —— 微信会渲染成它自己的表情，发出去是文字，不是图片。
+// 所以这里可以放心多加几个：不占流量、不会被当成照片、长按也不会变"保存图片"。
 const EMOJI_BY_MOOD = {
-  happy: ['🌸', '✨', '🍰', '🍡'],
-  shy: ['🌸', '🍓', '🐰', '🧸'],
-  sad: ['☁️', '🍂'],
-  tired: ['💤', '☁️', '🌙'],
-  neutral: ['🌸', '☁️', '🐾', '🍪'],
+  happy: ['😂', '🥰', '😆', '😏', '✨', '🌸', '🍰', '🎉', '👏', '😌'],
+  shy: ['😳', '🙈', '🤭', '💗', '😶', '🫣', '😳', '💞'],
+  sad: ['🥺', '😔', '💦', '☁️', '😞', '🫂'],
+  tired: ['😪', '💤', '🌙', '😮‍💨', '🥱'],
+  neutral: ['🙂', '😐', '🌸', '☕', '🍪', '🐾', '😌'],
   // 平静档：不带甜味的符号
-  calm: ['☕', '🌙', '☁️', '📐'],
-  angry: ['💢', '😑', '☕']
+  calm: ['☕', '🌙', '☁️', '😐', '🙂'],
+  angry: ['😤', '💢', '😑', '🙄', '😠', '😒']
 };
 
 /** 从文本判断情绪，决定补哪一类 */
@@ -427,26 +429,39 @@ function pickOne(arr) {
  * @param opts.emojiChance   这条回复至少带一个 emoji 的概率
  */
 export function ensureEmoji(bubbles, opts = {}) {
-  const { kaomojiChance = 0.65, emojiChance = 0.35 } = opts;
+  const { kaomojiChance = 0, emojiChance = 0.35, userText = '' } = opts;
   if (!Array.isArray(bubbles) || bubbles.length === 0) return bubbles;
 
-  const mood = detectMood(bubbles.join('\n'));
+  // 情绪从「他说的」+「她回的」两处一起判。
+  // 只看她的话会出错：他说「我今天被人骂了」，她回「谁。骂了什么」——
+  // 只判她这句会命中「骂」算成愤怒，配上 😒，把心疼演成嫌弃。
+  const mood = detectMood(`${userText} ${bubbles.join('\n')}`);
 
-  // 颜文字：整条回复都没有才补
-  if (!hasKaomoji(bubbles.join('\n')) && Math.random() < kaomojiChance) {
+  const joined = bubbles.join('\n');
+
+  // 二选一：已经有任一表情就不再补。
+  // 以前两道 if 各判各的，会出现「一句话末尾一个颜文字 + 一个 emoji」，很怪。
+  if (hasKaomoji(joined) || hasEmoji(joined)) return bubbles;
+
+  // 颜文字（配 0 就彻底关掉，改用微信自带 emoji）
+  if (kaomojiChance > 0 && Math.random() < kaomojiChance) {
     const k = pickOne(KAOMOJI_BY_MOOD[mood] || KAOMOJI_BY_MOOD.neutral);
-    // 挂在最长的气泡末尾，读起来最自然
     let idx = 0;
     for (let i = 1; i < bubbles.length; i++) {
       if (bubbles[i].length > bubbles[idx].length) idx = i;
     }
     bubbles[idx] = bubbles[idx].replace(/[。！？!?…~～\s]+$/, '') + ' ' + k;
+    return bubbles;
   }
 
-  // emoji：更克制
-  if (!hasEmoji(bubbles.join('\n')) && Math.random() < emojiChance) {
+  // emoji（微信自带，发出去是文字不是图片）
+  if (Math.random() < emojiChance) {
     const e = pickOne(EMOJI_BY_MOOD[mood] || EMOJI_BY_MOOD.neutral);
-    const idx = Math.floor(Math.random() * bubbles.length);
+    // 挂在最长的气泡上。随机挂容易落在「嗯」这种短句后面，很怪。
+    let idx = 0;
+    for (let i = 1; i < bubbles.length; i++) {
+      if (bubbles[i].length > bubbles[idx].length) idx = i;
+    }
     bubbles[idx] = bubbles[idx] + ' ' + e;
   }
 
