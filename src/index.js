@@ -61,6 +61,7 @@ import {
 } from './mood.js';
 import { matchAction, runAction, listActions, ensureActionsFile } from './actions.js';
 import { webSearch, formatSources, needsSearch, buildSearchQuery } from './websearch.js';
+import { buildLinkBlock, extractUrls } from './linkpreview.js';
 import { canSearch, recordSearch, getUsage as getSearchUsage } from './searchbudget.js';
 import {
   searchVault,
@@ -541,8 +542,10 @@ async function handleWithDsh(state, msg, text) {
           }
           lines.push(
             '请基于上面这些真实资料回答，把结果说成自己的话（不要罗列网址）。',
-            '如果资料里确实没有相关信息，就老实说没查到，绝对不要凭印象编造。',
-            '提到出处时说"网上查到的"就行。'
+            '如果资料里确实没有相关信息，就老实说没查到（"没搜到" "查不到" "没看到相关的"），绝对不要凭印象编造。',
+            '说来源的时候用口语，别像念报告。可以挑一个，或者说得更随意：',
+            '"我查了下" "刚搜了一下" "网上看了一圈" "翻了翻" "我搜的"',
+            '不要用"根据搜索结果" "资料显示" "经查询" "据我所知" 这种书面腔。'
           );
           searchBlock = lines.join('\n');
           log(`  [搜索] 拿到 ${sr.sources.length} 条结果${sr.answer ? `、摘要 ${sr.answer.length} 字` : ''}`);
@@ -690,7 +693,21 @@ async function handleWithDsh(state, msg, text) {
       recentReplies.map((s, i) => `${i + 1}. ${s}`).join('\n')
     : '';
 
-  // 本轮动态上下文：场景 + 情绪 + 知识库 + 搜索结果 + 句式随机。
+  // ── 链接预览 ──────────────────────────────────────────────────────
+  // 他发 B站/网页链接时，抓标题、UP主、简介、播放量塞进上下文。
+  // 这样她能接话（"标题看着挺离谱""这UP主我认识"），而不是干看着一串 URL。
+  //
+  // 注意：她没真的看过视频，所以块里明确写了"别装作看过具体画面"。
+  let linkBlock = '';
+  if (extractUrls(text).length) {
+    try {
+      linkBlock = await buildLinkBlock(text, { log });
+    } catch (e) {
+      warn('  [链接] 异常: ' + e.message);
+    }
+  }
+
+  // 本轮动态上下文：场景 + 情绪 + 知识库 + 搜索结果 + 链接 + 句式随机。
   // 注意：不拼进 persona.prompt，走 buildChatMessages 的 dynamicContext，
   // 这样人格那段 system 前缀保持稳定、能吃上缓存。
   //
@@ -700,6 +717,7 @@ async function handleWithDsh(state, msg, text) {
     moodBlock(userId),
     sceneBlock,
     imageBlock,
+    linkBlock,
     ragBlock,
     searchBlock,
     avoidBlock,
