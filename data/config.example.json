@@ -102,7 +102,7 @@
     "proactiveBurstGapMs":  500,
     "bubbleMergeChance":  0.4,
     "kaomojiChance":  0,
-    "emojiChance":  0.4,
+    "emojiChance":  0.5,
     "autoSearch":  true,
     "searchMaxUses":  3,
     "searchTimeoutMs":  60000,
