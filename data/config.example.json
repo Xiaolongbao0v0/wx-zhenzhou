@@ -54,7 +54,7 @@
     "minimumFragmentLength":  0,
     "stickerDir":  "",
     "allowStickers":  false,
-    "proactive":  true,
+    "proactive":  false,
     "proactiveMinMinutes":  7,
     "proactiveMaxMinutes":  13,
     "proactiveTickSeconds":  15,
