@@ -35,11 +35,10 @@ import {
   textItem,
   extractText,
   describeItems,
-  splitText,
-  TYPING_STATUS
+  splitText
 } from './ilink.js';
 
-import { runTask, describeRuntime, resolveDshCommand } from './dsh.js';
+import { runTask, describeRuntime } from './dsh.js';
 import { chatComplete, buildChatMessages, readApiKey } from './chat.js';
 import { buildTask, appendTurn, clearHistory, loadHistory, compressHistory } from './memory.js';
 import {
@@ -59,14 +58,14 @@ import {
   pickScenario, SCENARIO_HINTS
 } from './proactivehistory.js';
 import {
-  isBusy, setBusy, setFree, getState as getBusyState, getAllBusy,
+  isBusy, setBusy, setFree, getState as getBusyState,
   extractStateMarker, guessMarker, looksFree
 } from './busymode.js';
 import {
   isAngry, markAngry, clearAngry, softenAngry, tickAngry,
   moodBlock, extractMoodMarkers, looksForgiven
 } from './mood.js';
-import { matchAction, runAction, listActions, ensureActionsFile } from './actions.js';
+import { matchAction, runAction, listActions } from './actions.js';
 import { webSearch, formatSources, needsSearch, buildSearchQuery } from './websearch.js';
 import { buildLinkBlock, extractUrls } from './linkpreview.js';
 import { canSearch, recordSearch, getUsage as getSearchUsage } from './searchbudget.js';
@@ -84,7 +83,7 @@ import {
 import {
   loadScene, saveScene, resetScene, createScene, analyzeTurn,
   recordUserTurn, recordReply, canOpenNewTopic, markNewTopic,
-  formatSceneForReply, formatSceneForProactive, topicOf, lastQuestionOf
+  formatSceneForReply, formatSceneForProactive
 } from './scene.js';
 import { imageItemsOf, downloadInboundImage } from './inbound.js';
 import { describeImages, describeVisionFailure } from './vision.js';
@@ -97,8 +96,8 @@ function isSelfReferential(text) {
   return /关于我|我的(资料|信息|画像|习惯|爱好|电脑|配置|笔记|知识库|数据)|你知道(我|些)|了解我|记得我|我是谁|我是什么|我平时|我玩|我用|我家|你的?(笔记|资料|知识库)|你(写|记)的|库里(有|存)/.test(String(text || ''));
 }
 
-import { sendImage, sendImageVariant } from './media.js';
-import { listStickers, pickSticker, ensureStickerDir, stickerDirPath, listCategories } from './sticker.js';
+import { sendImage } from './media.js';
+import { listStickers, pickSticker, ensureStickerDir } from './sticker.js';
 import { loadConfig, ensureConfigFile, writeConfig, CFG_PATH, ROOT } from './config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
