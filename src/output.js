@@ -235,13 +235,20 @@ export function splitIntoBubbles(text, opts = {}) {
     else merged.push(p);
   }
 
+  // 去掉「纯标点」的气泡。
+  // 模型有时会单独输出一行「……」或者「？」，拆开之后微信里就是一条孤零零的标点，
+  // 看着像抽风。只有在不止一条气泡时才清理——单条回复就是「？」的时候要留着。
+  const isPunctOnly = (s) => /^[…\.。，,、？?！!~～\-—\s]+$/.test(s);
+  let cleaned = merged.length > 1 ? merged.filter((s) => !isPunctOnly(s)) : merged;
+  if (!cleaned.length) cleaned = merged;
+
   // 超过上限：把多余的并进最后一条，而不是丢掉
-  if (merged.length > maxMessages) {
-    const head = merged.slice(0, maxMessages - 1);
-    const tail = merged.slice(maxMessages - 1).join('\n\n');
+  if (cleaned.length > maxMessages) {
+    const head = cleaned.slice(0, maxMessages - 1);
+    const tail = cleaned.slice(maxMessages - 1).join('\n\n');
     return [...head, tail];
   }
-  return merged;
+  return cleaned;
 }
 
 /**
@@ -316,15 +323,15 @@ export function humanDelayMs(text, opts = {}) {
 // 补的时候按情绪分组挑，对方难过时不会贴大笑颜文字。
 
 const KAOMOJI_BY_MOOD = {
-  happy: ['(＾▽＾)', '(◍・ᴗ・◍)', '(*´▽`*)', '(๑˃̵ᴗ˂̵)', '(｡・̀ᴗ-)✧', '٩(◕‿◕｡)۶', 'o(≧▽≦)o', '(●´ω`●)', '(≧▽≦)', '(๑•̀ㅂ•́)و✧'],
-  shy: ['(๑´ω`๑)', '(*/ω＼*)', '(´｡・ᵕ・｡`)', '(￣▽￣*)ゞ'],
-  sad: ['(´；ω；`)', '(｡•́︿•̀｡)', '(๑•́ ₃ •̀๑)', '(｡╥﹏╥｡)'],
-  tired: ['(´-ω-`)', '(￣o￣) z z Z', '( ˘ω˘ )', '(∪.∪ )...zzz'],
-  neutral: ['(・∀・)', '(｡・̀ᴗ-)✧', '(≧∇≦)ﾉ', '(◕‿◕)'],
+  happy: ['(＾▽＾)', '(◍・ᴗ・◍)', '(*´▽`*)', '(￣▽￣)', '(￣ω￣)', '(๑•̀ㅂ•́)و✧', '٩(◕‿◕｡)۶', 'o(≧▽≦)o', '(●´ω`●)'],
+  shy: ['(///▽///)', '(〃ω〃)', '(´,,•ω•,,)', '(๑´ω`๑)', '(*/ω＼*)', '(￣▽￣*)ゞ', '(๑•́ ₃ •̀๑)'],
+  sad: ['(´-ω-`)', '(｡•́︿•̀｡)', '(´；ω；`)', '(｡╥﹏╥｡)', '(๑•́ ₃ •̀๑)'],
+  tired: ['(´-ω-`)', '(￣o￣) z z Z', '( ˘ω˘ )', '(∪.∪ )...zzz', '(´～`)'],
+  neutral: ['(・∀・)', '(◕‿◕)', '(￣ω￣)', '(´｡• ᵕ •｡`)'],
   // 平静档：给冷静、知性的人设用。不卖萌、不撒娇，只有一点点干巴巴的表情。
-  calm: ['(・∀・)', '(´-ω-`)', '(￣ー￣)', '(・_・;)', '( ˘ω˘ )'],
+  calm: ['(・∀・)', '(￣ー￣)', '(・_・;)', '( ˘ω˘ )'],
   // 生气 / 说教档：冷脸、审视、嫌弃，不带甜味
-  angry: ['(￣^￣)', '(¬_¬)', '(￣ー￣)', '(・_・;)', '(；￣Д￣)']
+  angry: ['(￣^￣)', '(¬_¬)', '(╬ Ò﹏Ó)', '(￣ー￣)', '(；￣Д￣)', '(・_・;)']
 };
 
 // 全部用 Unicode emoji —— 微信会渲染成它自己的表情，发出去是文字，不是图片。
@@ -370,7 +377,18 @@ function detectMood(text) {
 
 /** 文本里是否已有颜文字 */
 export function hasKaomoji(text) {
-  return /[\(（][^\)）\n]{0,24}[•´`｡╥﹏ㅂㅁω＼▽◍\*・ᴗ◕‿≧∇≦ﾉ٩۶][^\)）\n]{0,24}[\)）]/.test(String(text || ''));
+  // 旧实现靠一个字符白名单判断，漏了 ￣ ー ﹏ 这类常见颜文字符号
+  // （比如 (￣ー￣) 判不出来，于是又补了一个，一句里出现两个颜文字）。
+  // 现在改成结构判定：括号内、不含汉字、且含至少一个非 ASCII 字母数字的符号。
+  const t = String(text || '');
+  const re = /[(（]([^)）\n]{1,20})[)）]/g;
+  let m;
+  while ((m = re.exec(t))) {
+    const inner = m[1];
+    if (/[\u4e00-\u9fa5]/.test(inner)) continue;          // 含汉字 → 不是颜文字
+    if (/[^\x00-\x7F0-9A-Za-z\s]/.test(inner)) return true; // 有非 ASCII 符号 → 是颜文字
+  }
+  return false;
 }
 
 /** 文本里是否已有 emoji */
@@ -441,9 +459,42 @@ export function ensureEmoji(bubbles, opts = {}) {
   // 只判她这句会命中「骂」算成愤怒，配上 😒，把心疼演成嫌弃。
   const mood = detectMood(`${userText} ${bubbles.join('\n')}`);
 
+  // 情绪守卫（默认关闭，由 EMOJI_MOOD_GUARD 开启，可逗号分隔多种情绪，如 "sad,angry"）。
+  //
+  // 动机：人设里写着「他真难过的时候，一个表情都别用」，但这段代码会按情绪
+  // 自动补表情（sad 时补 (´-ω-`)、emoji 补 🥺），等于把人设那句话覆盖掉了。
+  // 实测「我被人骂了」被配上 🥺，观感像在卖萌而不是心疼。
+  //
+  // 开启后在该情绪下：既不再自动补，也把模型自己写进去的表情清掉。
+  // 默认关闭 —— 不改变现有行为，等实验确认有效再决定是否转正。
+  const guard = String(process.env.EMOJI_MOOD_GUARD || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (guard.includes(mood)) {
+    for (let i = 0; i < bubbles.length; i++) {
+      bubbles[i] = bubbles[i]
+        .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}]/gu, '')
+        .replace(/[ \t]{2,}/g, ' ')
+        .trim();
+    }
+    return bubbles.filter((b) => b.length > 0);
+  }
+
   const joined = bubbles.join('\n');
 
-  // 二选一：已经有任一表情就不再补。
+  // 二选一（硬规则）：模型自己可能在一句里既写颜文字又写 emoji。
+  // 这时保留颜文字、删掉 emoji —— 颜文字更像她，emoji 谁都能发。
+  if (hasKaomoji(joined) && hasEmoji(joined)) {
+    for (let i = 0; i < bubbles.length; i++) {
+      bubbles[i] = bubbles[i]
+        .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}]/gu, '')
+        .replace(/[ \t]{2,}/g, ' ')
+        .trim();
+    }
+  }
+
+  // 已经有任一表情就不再补。
   // 以前两道 if 各判各的，会出现「一句话末尾一个颜文字 + 一个 emoji」，很怪。
   if (hasKaomoji(joined) || hasEmoji(joined)) return bubbles;
 

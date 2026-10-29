@@ -31,16 +31,33 @@ function pickAvid(url) {
   return m ? m[1] : null;
 }
 
+/**
+ * B站反爬需要 buvid3 cookie。
+ *
+ * 实测（阿里云机房 IP）：裸 fetch 200，只带 UA 反而 412，加上这个 cookie 又回到 200。
+ * 412 时返回的是一段 HTML 挑战页，JSON.parse 会炸——所以下面还兜了一层。
+ */
+const BILI_COOKIE = 'buvid3=8E4B2C1A-1234-5678-9ABC-DEF012345678infoc; b_nut=1700000000';
+
 async function getJson(url, timeoutMs = 8000) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const r = await fetch(url, {
-      headers: { 'User-Agent': UA, Referer: 'https://www.bilibili.com/' },
+      headers: {
+        'User-Agent': UA,
+        Referer: 'https://www.bilibili.com/',
+        Accept: 'application/json, text/plain, */*',
+        'Accept-Language': 'zh-CN,zh;q=0.9',
+        Cookie: BILI_COOKIE
+      },
       signal: ctrl.signal
     });
     if (!r.ok) return null;
-    return await r.json();
+    const text = await r.text();
+    // 412 风控时返回 HTML，直接 parse 会抛异常
+    if (!text.trimStart().startsWith('{')) return null;
+    try { return JSON.parse(text); } catch { return null; }
   } catch {
     return null;
   } finally {
