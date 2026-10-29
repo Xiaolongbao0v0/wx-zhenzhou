@@ -97,18 +97,25 @@ function mimeOf(filePath) {
  * @param {Array<{filePath:string, mime?:string}>} files
  * @returns {Promise<{ok:boolean, kind?:string, reason?:string, descriptions:string[], ms:number}>}
  */
-export async function describeImages(files, { cfg = {}, log = () => {}, warn = () => {} } = {}) {
+export async function describeImages(files, { cfg = {}, chatApiKey = '', log = () => {}, warn = () => {} } = {}) {
   const started = Date.now();
   const list = (files || []).filter((f) => f && f.filePath);
   if (!list.length) {
     return { ok: false, kind: 'download', reason: '没有可用的图片文件', descriptions: [], ms: 0 };
   }
 
-  // 1) 配了没
-  const apiKey = cfg.visionApiKey || process.env.ARK_API_KEY || '';
-  if (!apiKey) {
+  // 1) 用哪个模型看图
+  //
+  // 优先用专门配的视觉 Key（豆包便宜快）。没配就退回主聊天模型 ——
+  // 实测 DeepSeek v4 本身就能读图（能准确说出一张左红右蓝图的三色布局），
+  // 所以没有 ARK Key 也不该直接说"眼睛不好使"，那是白丢功能。
+  const arkKey = cfg.visionApiKey || process.env.ARK_API_KEY || '';
+  const useChat = !arkKey && cfg.visionUseChatModel !== false && chatApiKey;
+  if (!arkKey && !useChat) {
     return { ok: false, kind: 'nokey', reason: describeVisionFailure('nokey'), descriptions: [], ms: 0 };
   }
+  const provider = arkKey ? 'ark' : 'chat';
+  const apiKey = arkKey || chatApiKey;
 
   // 2) 冷却期直接挡掉，不浪费一次请求
   const now = Date.now();
@@ -125,8 +132,12 @@ export async function describeImages(files, { cfg = {}, log = () => {}, warn = (
   }
 
   // 3) 组装请求
-  const baseUrl = String(cfg.visionBaseUrl || VISION_BASE_URL).replace(/\/+$/, '');
-  const model = cfg.visionModel || VISION_MODEL;
+  const baseUrl = String(
+    (provider === 'ark' ? cfg.visionBaseUrl : cfg.chatBaseUrl) ||
+      (provider === 'ark' ? VISION_BASE_URL : 'https://api.deepseek.com')
+  ).replace(/\/+$/, '');
+  const model =
+    provider === 'ark' ? cfg.visionModel || VISION_MODEL : cfg.chatModel || 'deepseek-v4-flash';
   const maxImages = Math.max(1, Number(cfg.visionMaxImages ?? 1));
   const timeoutMs = Math.max(5000, Number(cfg.visionTimeoutMs ?? 45000));
   const picked = list.slice(0, maxImages);
@@ -145,17 +156,22 @@ export async function describeImages(files, { cfg = {}, log = () => {}, warn = (
     model,
     messages: [{ role: 'user', content }],
     temperature: 0.2,
-    max_tokens: 700
+    // 走主聊天模型时它自带思维链，会先消耗一批 reasoning_tokens 才输出正文，
+    // 700 在实测里会被思考吃光（正文为空）。所以给足预算。
+    max_tokens: provider === 'chat' ? Math.max(1200, Number(cfg.visionMaxTokens || 0)) : 700
   };
 
   // 豆包 1.6/2.0 系列默认会先"思考"，看图描述这种任务纯属浪费：
   // 实测同一张图 reasoning_tokens 262 → 0、耗时 3.4s → 1.4s。
   // 想让它思考就把 visionThinking 设成 'enabled'（或 'auto'）。
-  const thinking = String(cfg.visionThinking ?? 'disabled').toLowerCase();
-  if (thinking === 'enabled' || thinking === 'auto') {
-    body.thinking = { type: thinking };
-  } else if (thinking === 'disabled') {
-    body.thinking = { type: 'disabled' };
+  // 只有豆包认这个参数，DeepSeek 那边不透传，免得被拒。
+  if (provider === 'ark') {
+    const thinking = String(cfg.visionThinking ?? 'disabled').toLowerCase();
+    if (thinking === 'enabled' || thinking === 'auto') {
+      body.thinking = { type: thinking };
+    } else if (thinking === 'disabled') {
+      body.thinking = { type: 'disabled' };
+    }
   }
 
   let status = 0;

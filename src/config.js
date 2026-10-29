@@ -201,6 +201,9 @@ const DEFAULTS = {
    */
   profileDistillMinutes: 30,
 
+  /** 知识库索引多久重建一次（分钟）。归档每天追加，索引不重建就检索不到新内容 */
+  vaultReindexMinutes: 360,
+
   /**
    * 每轮固定注入的画像事实卡字符数（分层注入的第一层）。
    * 0 = 不注入。约 360 字符 ≈ 250 tokens，换来"她一直知道你是什么人"。

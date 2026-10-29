@@ -392,7 +392,7 @@ function scoreQuery(query, idx, { topK, minScore }) {
  * 明确告诉模型这是背景资料，不要照搬、不要说"根据资料"。
  */
 export function formatHits(hits, { maxCharsPerHit = 420 } = {}) {  if (!hits || !hits.length) return '';
-  const lines = ['【从你自己的笔记里翻到的东西】'];
+  const lines = ['【你翻到的、以前的一些记录】'];
   hits.forEach((h, i) => {
     const body = String(h.text || '').replace(/\s+/g, ' ').trim();
     const cut = body.length > maxCharsPerHit ? body.slice(0, maxCharsPerHit) + '…' : body;
@@ -400,9 +400,9 @@ export function formatHits(hits, { maxCharsPerHit = 420 } = {}) {  if (!hits || 
     lines.push(`${i + 1}. 「${label}」${cut}`);
   });
   lines.push('');
-  lines.push('这些是你自己记下来的背景资料。说话时可以自然地用到，但：');
-  lines.push('- 不要照搬原句，更不要列出来当成"资料摘录"；');
-  lines.push('- 不要说"根据资料""我看到笔记里写着"这种话；');
+  lines.push('这里面既有以前聊过的内容，也可能有你自己当时的原话。用法：');
+  lines.push('- 只用来回忆"这事我们说过"这个事实，不要照搬当时的原句，也不要列成资料摘录；');
+  lines.push('- 不要说"根据资料""我看到记录里写着"这种话，就像你本来还记得一样；');
   lines.push('- 跟当前话题无关就完全不提，不要硬塞。');
   return lines.join('\n');
 }

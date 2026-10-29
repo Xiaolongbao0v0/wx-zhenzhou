@@ -492,7 +492,7 @@ async function handleWithDsh(state, msg, text) {
     if (files.length) {
       const vision = state.cfg.visionEnabled === false
         ? { ok: false, kind: 'nokey', reason: '识图功能被关掉了', descriptions: [] }
-        : await describeImages(files, { cfg: state.cfg, log, warn });
+        : await describeImages(files, { cfg: state.cfg, chatApiKey: API_KEY.key, log, warn });
 
       if (vision.ok) {
         imageCount = vision.descriptions.length;
@@ -1564,7 +1564,7 @@ async function main() {
       ? '关闭'
       : visionKey
         ? `开启（豆包 ${cfg.visionModel || 'doubao-seed-1-6-vision-250815'}，一次最多 ${cfg.visionMaxImages ?? 1} 张，识别失败会自己说看不见）`
-        : '开启但没配 Key（收到图会说"眼睛不好使"）'}`);
+        : `开启（复用主模型 ${cfg.chatModel || 'deepseek'} 看图，一次最多 ${cfg.visionMaxImages ?? 1} 张）`}`);
   }
   console.log(`  配置文件 : ${CFG_PATH}`);
   if (cfg.allowedUsers.length) {
@@ -1599,12 +1599,28 @@ async function main() {
         if (missing.length) {
           warn(`  画像卡缺文件：${missing.join('、')}（这几篇不会注入）`);
         }
-        // 深呼吸一次：真的检索一遍，确认从「按键」到「出结果」整条路是通的
-        const probe = await searchVault('显卡 配置', cfg.vaultPath, { topK: 1, minScore: 0.2 });
+        // 深呼吸一次：真的检索一遍，确认从「按键」到「出结果」整条路是通的。
+        //
+        // 探针不能用固定词：以前写死「显卡 配置」，那是给 Obsidian 设备笔记准备的，
+        // 换成聊天语料之后必然打不中，每天启动都报一次假警报。
+        // 现在直接从库里最新那份文档里抠一句真实存在的话来查 —— 索引建对了就一定能命中。
+        let probeQuery = '显卡 配置';
+        try {
+          const { readdirSync } = await import('node:fs');
+          const mds = readdirSync(cfg.vaultPath).filter((f) => f.endsWith('.md')).sort();
+          if (mds.length) {
+            const text = await readFile(path.join(cfg.vaultPath, mds[mds.length - 1]), 'utf8');
+            const line = text.split('\n').find((l) => /^他[：:]/.test(l.trim()));
+            if (line) probeQuery = line.replace(/^他[：:]\s*/, '').slice(0, 20);
+          }
+        } catch {
+          /* 抠不出来就用默认探针，不影响主流程 */
+        }
+        const probe = await searchVault(probeQuery, cfg.vaultPath, { topK: 1, minScore: 0.2 });
         if (probe.ok && probe.hits.length) {
-          log(`  自测检索通过（${probe.ms}ms）→ ${probe.hits[0].title}`);
+          log(`  自测检索通过（${probe.ms}ms）「${probeQuery}」→ ${probe.hits[0].title}`);
         } else {
-          warn('  自测检索没有命中，知识库可能是空的或全是无关文件');
+          warn(`  自测检索没有命中（探针「${probeQuery}」），知识库可能是空的或全是无关文件`);
         }
       } catch (e) {
         warn('知识库初始化失败（RAG 不会生效）: ' + e.message);
@@ -2157,6 +2173,21 @@ async function main() {
   });
 
   proactive.start();
+
+  // 知识库索引每 6 小时重建一次。
+  // 归档是每天追加的，如果只在启动时建一次索引，昨晚聊的内容要等到下次重启才能被检索到 ——
+  // 而重启是要断线的，不值得为了这个每天重启一次。重建本身是同步的、语料小的时候毫秒级。
+  if (cfg.ragEnabled && cfg.vaultPath) {
+    const reindexMs = Math.max(30, Number(cfg.vaultReindexMinutes) || 360) * 60 * 1000;
+    setInterval(() => {
+      try {
+        const idx = rebuildVaultIndex(cfg.vaultPath);
+        log(`  [知识库] 索引已重建：${idx?.chunks?.length ?? 0} 个片段`);
+      } catch (e) {
+        warn('  [知识库] 重建失败: ' + e.message);
+      }
+    }, reindexMs).unref?.();
+  }
 
   log('开始长轮询，等待微信消息…');
   console.log('');
