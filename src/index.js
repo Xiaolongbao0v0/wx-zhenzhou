@@ -270,6 +270,9 @@ const lastBubbleCount = new Map();
  * 光靠 temperature 压不住重复，模型在小话题上分布太集中。
  */
 const recentReplyMem = new Map();
+
+/** 每个用户最近发过的"冒泡"（先应一声的那半句），用来防止连着几次都说"诶？" */
+const ackMem = new Map();
 const RECENT_REPLY_KEEP = 6;
 
 function rememberReply(userId, text) {
@@ -816,6 +819,66 @@ async function handleWithDsh(state, msg, text) {
 
   const persona = basePersona;
 
+  // ── 先冒个泡：和正文并行生成一个 2~8 字的即时反应 ──────────────────
+  //
+  // 为什么要并行：真人被戳到的那一下，先出来的是"诶？""等下""真的假的"，
+  // 想清楚了才说整句。串行做要等两次，并行做不额外增加等待 ——
+  // 这个小调用通常 0.6~1 秒就回来了，正文还要 2 秒，所以能自然形成"两段"。
+  //
+  // 用独立的小提示词而不是整份人设：一句"诶？"不需要 6000 字人设，省 token 也更快。
+  // 语气靠示例 + 禁用清单兜住（历史教训：给死例句，她会在所有场合复读同一句）。
+  let ackTask = null;
+  if (state.cfg.ackEnabled !== false) {
+    const chance = Number.isFinite(state.cfg.ackChance) ? state.cfg.ackChance : 0.3;
+    const minLen = Math.max(0, Number(state.cfg.ackMinTextLen) || 0);
+    const recentAcks = ackMem.get(userId) || [];
+    if (text.length >= minLen && !text.startsWith('/') && Math.random() < chance) {
+      ackTask = (async () => {
+        const ban = recentAcks.length ? `\n不要用这些（刚说过了）：${recentAcks.slice(-5).join('、')}` : '';
+        const r = await chatComplete({
+          baseUrl: state.cfg.chatBaseUrl,
+          apiKey: API_KEY.key,
+          model: state.cfg.chatModel,
+          messages: [
+            {
+              role: 'system',
+              content: [
+                '你在微信上跟一个很熟的人聊天，风格短、口语、有一点小情绪，不会说客套话。',
+                '',
+                '现在只需要给出"听到他这句话的第一反应"，不要回答问题、不要解释、不要展开。',
+                '要求：2~8 个字，可以是一个语气词、一句追问、一句吐槽或一声短叹。',
+                '示例（只是参考语气，不要照抄）：诶？ / 等下 / 真的假的 / 你再说一遍 / 嗯？ / 别吓我 / 啥意思啊。',
+                '只输出这一句话本身：不要引号、不要括号动作、不要句号结尾。' + ban
+              ].join('\n')
+            },
+            { role: 'user', content: text }
+          ],
+          temperature: 0.9,
+          maxTokens: 300,
+          // 关掉思考：这句"诶？"不需要推理，实测 1.4 秒 → 0.33 秒
+          thinking: { type: 'disabled' },
+          timeoutMs: 8000
+        });
+        if (!r.ok) return;
+        const line = String(r.text || '')
+          .replace(/^["'「『]|["'」』]$/g, '')
+          .replace(/[。！!]+$/g, '')
+          .split('\n')[0]
+          .trim();
+        if (!line || [...line].length > 12) return;
+        if (recentAcks.some((x) => x === line)) return;
+
+        await tryTyping(state, userId, true);
+        const sent = await sendText(state, userId, line);
+        if (sent) {
+          const next = [...recentAcks, line].slice(-8);
+          ackMem.set(userId, next);
+          log(`  [冒泡] ${line}`);
+        }
+      })().catch(() => {});
+    }
+  }
+
   // 两条通道：
   //   chat —— 直连 API，只带人设和历史，输入约 2400 tokens，快且省
   //   dsh  —— 走 DSH headless，带全套工具（约 17000 tokens），能干活但贵
@@ -1013,6 +1076,25 @@ async function handleWithDsh(state, msg, text) {
     // 记住这次发的是哪个类别，避免连着几张都一样
     for (const n of stickerNames) rememberLine(n, 'sticker:' + n);
 
+    // 先等「冒泡」落定：它必须排在正文前面。
+    // 不等的话，如果它比正文慢，就会出现"答案"已经发完，才冒出那句"诶？"
+    if (ackTask) {
+      try {
+        await ackTask;
+      } catch {
+        /* 冒泡失败不影响正文 */
+      }
+    }
+
+    // 开口延迟：这次她不是秒回，而是过一会儿才拿起手机。
+    // 期间一直显示"正在输入"，所以看起来像在打字，而不是卡住了。
+    const waitMs = pickReplyDelay(state.cfg);
+    if (waitMs > 0) {
+      await tryTyping(state, userId, true);
+      log(`  [节奏] 先晾 ${(waitMs / 1000).toFixed(1)} 秒再回`);
+      await delay(waitMs);
+    }
+
     await sendBubbles(state, userId, finalBubbles, stickerNames);
 
     // 发完了再慢慢整理"关于他的事实"，不占他等回复的时间。
@@ -1087,6 +1169,29 @@ function gapBeforeBubble(text, cfg) {
   // 真实打字的方差比固定模式大，用 ±30% 抖动
   const jitter = base * 0.3 * (Math.random() * 2 - 1);
   return Math.max(150, Math.round(base + jitter));
+}
+
+/**
+ * 掷一次"开口延迟"：她这次是不是要过一会儿才回。
+ *
+ * 为什么和打字时间分开算：打字时间模拟的是"她正在打这句话"，
+ * 开口延迟模拟的是"她还没拿起手机"—— 这两件事在真人身上是分开的。
+ *
+ * 深夜概率翻倍：凌晨两三点秒回，比任何措辞都假。
+ */
+function pickReplyDelay(cfg) {
+  const base = Number.isFinite(cfg.replyDelayChance) ? cfg.replyDelayChance : 0;
+  if (base <= 0) return 0;
+  const hour = new Date().getHours();
+  const night = hour >= 23 || hour < 7;
+  const chance = Math.min(0.6, base * (night ? 2 : 1));
+  if (Math.random() >= chance) return 0;
+
+  const min = Math.max(1000, Number(cfg.replyDelayMinMs) || 6000);
+  const max = Math.max(min, Number(cfg.replyDelayMaxMs) || 25000);
+  // 幂次 >1 让取值偏向短的一端：大多数 6~10 秒，偶尔才会接近上限。
+  // 真人发呆是常态，但不会每次都发五分钟的呆。
+  return Math.round(min + (max - min) * Math.pow(Math.random(), 1.8));
 }
 
 async function sendBubbles(state, userId, bubbles, stickerNames = []) {
@@ -1825,6 +1930,29 @@ async function main() {
       } catch { /* 拿不到就不带，场景照样能说 */ }
     }
 
+    // ── 翻旧账：从记忆里捞一件以前的事，这次主动消息可以顺口提一句 ──────
+    //
+    // 这是"记得"的最高级形态：不是被问到才翻档案，而是她自己挑了个时机想起来。
+    // 素材只从长期事实档案里取 —— 那里存的都是他明确说过的事，提起来才不像瞎编。
+    // 搭不上就别提：硬塞一句"你胃还疼吗"在莫名其妙的时刻，比不提更假。
+    let recallBlock = '';
+    const recallChance = Number.isFinite(cfg.proactiveRecallChance) ? cfg.proactiveRecallChance : 0.45;
+    if (!busy && !escalate && !continueMode && Math.random() < recallChance) {
+      try {
+        const learned = await loadProfile(userId);
+        if (learned.facts.length) {
+          const fact = learned.facts[Math.floor(Math.random() * learned.facts.length)];
+          recallBlock = [
+            '',
+            '【一件你可能想起来的旧事】',
+            `- ${fact}`,
+            '如果这件事跟眼下的时间点、这句话搭得上（比如他胃不好，正好到了饭点），就顺口提一句，像你一直记着；',
+            '搭不上就完全不要提 —— 不要为了用上这条硬拐话题，也不要念原句。'
+          ].join('\n');
+        }
+      } catch { /* 取不到就不提 */ }
+    }
+
     const buildInstruction = (extraBan = '') => (busy
       ? [
           `他说了要去忙，现在过了 ${idleMinutes} 分钟了。`,
@@ -1917,6 +2045,7 @@ async function main() {
             questionHint || '- 尽量别用问句；要问也只问一件具体的小事。',
             questionContext,
             recentTopicContext,
+            recallBlock,
             noRepeatBlock,
             extraBan
           ].filter(Boolean).join('\n'));
@@ -2174,7 +2303,7 @@ async function main() {
 
   proactive.start();
 
-  // 知识库索引每 6 小时重建一次。
+  // 知识库索引按 vaultReindexMinutes（默认 60 分钟）重建一次。
   // 归档是每天追加的，如果只在启动时建一次索引，昨晚聊的内容要等到下次重启才能被检索到 ——
   // 而重启是要断线的，不值得为了这个每天重启一次。重建本身是同步的、语料小的时候毫秒级。
   if (cfg.ragEnabled && cfg.vaultPath) {

@@ -205,6 +205,34 @@ const DEFAULTS = {
   vaultReindexMinutes: 360,
 
   /**
+   * 回复前的"开口延迟"：不是打字时间，是"她还没看到手机 / 手上有事"的那段空白。
+   *
+   * 为什么必须有：实测线上 20 次回复全部落在 1.5~2.5 秒，一次例外都没有 ——
+   * 这种"永远准时"比措辞更容易露馅。真人是有时秒回、有时隔几十秒。
+   *
+   * replyDelayChance 是掷中的概率（深夜自动翻倍），命中后在 min~max 之间取，
+   * 偏向短的一端（大多数 6~10 秒，偶尔接近上限）。设 0 就关掉。
+   */
+  replyDelayChance: 0.12,
+  replyDelayMinMs: 6000,
+  replyDelayMaxMs: 25000,
+
+  /**
+   * 两段式回应：先冒个泡（"诶？""等下"），再发正文。
+   *
+   * 真人被一句话戳到时，第一反应往往是一个字，想清楚了才说整句。
+   * 这里用一次极短的并行调用生成那个"泡"，和正文同时开始，所以不额外增加等待。
+   * 嫌吵就设 ackEnabled: false。
+   */
+  ackEnabled: true,
+  ackChance: 0.3,
+  /** 多长的消息才值得先应一声（太短的"嗯"配个"诶？"很怪） */
+  ackMinTextLen: 8,
+
+  /** 主动消息里"顺口提一件旧事"的概率。0 = 从不翻旧账 */
+  proactiveRecallChance: 0.45,
+
+  /**
    * 每轮固定注入的画像事实卡字符数（分层注入的第一层）。
    * 0 = 不注入。约 360 字符 ≈ 250 tokens，换来"她一直知道你是什么人"。
    * 只在自指提问时才注入完整卡（profileMaxChars）。
@@ -467,6 +495,13 @@ export function ensureConfigFile() {
       sceneTtlMinutes: 180,
       profileEnabled: true,
       profileDistillMinutes: 30,
+      replyDelayChance: 0.12,
+      replyDelayMinMs: 6000,
+      replyDelayMaxMs: 25000,
+      ackEnabled: true,
+      ackChance: 0.3,
+      ackMinTextLen: 8,
+      proactiveRecallChance: 0.45,
       sceneProfileChars: 360,
       sceneRecentTopics: 5,
       recentTopicDays: 30,

@@ -91,7 +91,14 @@ export async function chatComplete(opts) {
     // top_p：只从累积概率前 p 的词里采样，配合温度一起放宽多样性
     presencePenalty,
     frequencyPenalty,
-    topP
+    topP,
+    // 只要一两句话的场景（比如"先冒个泡"）必须设上限，
+    // 否则按默认长度生成，又慢又费
+    maxTokens,
+    // deepseek v4 默认先思考再回答。实测同一个请求：
+    //   默认 → 1.4 秒、110 个推理 token；thinking=disabled → 0.33 秒、0 个。
+    // 需要"快"而不需要"想"的场合（冒泡、看图描述）就该关掉。
+    thinking
   } = opts;
 
   const started = Date.now();
@@ -118,6 +125,8 @@ export async function chatComplete(opts) {
     if (Number.isFinite(presencePenalty)) payload.presence_penalty = presencePenalty;
     if (Number.isFinite(frequencyPenalty)) payload.frequency_penalty = frequencyPenalty;
     if (Number.isFinite(topP)) payload.top_p = topP;
+    if (Number.isFinite(maxTokens) && maxTokens > 0) payload.max_tokens = maxTokens;
+    if (thinking) payload.thinking = thinking;
 
     const res = await fetch(url, {
       method: 'POST',
