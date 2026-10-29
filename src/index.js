@@ -43,6 +43,13 @@ import { runTask, describeRuntime, resolveDshCommand } from './dsh.js';
 import { chatComplete, buildChatMessages, readApiKey } from './chat.js';
 import { buildTask, appendTurn, clearHistory, loadHistory, compressHistory } from './memory.js';
 import {
+  loadProfile,
+  saveProfile,
+  buildProfileBlock,
+  mergeFacts,
+  DISTILL_SYSTEM
+} from './profile.js';
+import {
   listPersonas, getPersona, getUserPersona, setUserPersona, ensurePersonaDir, applyPersona
 } from './persona.js';
 import { stripActions, splitIntoBubbles, extractStickers, ensureEmoji, ensureSticker, adjustBubbleCount } from './output.js';
@@ -382,6 +389,75 @@ async function judgeSceneChange(state, text, scene) {
   }
 }
 
+/**
+ * 抽取「关于他的长期事实」，存进 data/profile/<用户>.json。
+ *
+ * 为什么异步、为什么限频：
+ *   这是记忆的维护工作，不该让等他回消息的时间更长。
+ *   而且这类抽取每条都做等于白烧钱 —— 每 30 分钟最多做一次，一小时最多 3 次。
+ *
+ * 失败一律静默：档案不见了顶多是"她忘了"，不能影响正常回话。
+ */
+const profileDistillTimes = [];
+async function distillProfile(state, userId) {
+  if (state.cfg.profileEnabled === false) return;
+
+  const now = Date.now();
+  const gapMs = Math.max(5, Number(state.cfg.profileDistillMinutes) || 30) * 60000;
+  const profile = await loadProfile(userId);
+  if (now - (profile.lastDistillAt || 0) < gapMs) return;
+
+  while (profileDistillTimes.length && now - profileDistillTimes[0] > 60 * 60 * 1000) {
+    profileDistillTimes.shift();
+  }
+  if (profileDistillTimes.length >= 3) return;
+  profileDistillTimes.push(now);
+
+  const history = await loadHistory(userId);
+  if (history.length < 4) return;
+
+  // 只看最近 12 条：更早的内容已经被之前的抽取覆盖过了
+  const recent = history
+    .slice(-12)
+    .map((m) => `${m.role === 'user' ? '他' : '你'}：${m.content}`)
+    .join('\n');
+
+  const known = profile.facts.length ? `已有档案：\n${profile.facts.map((f) => `- ${f}`).join('\n')}\n\n` : '';
+
+  const r = await chatComplete({
+    baseUrl: state.cfg.chatBaseUrl,
+    apiKey: API_KEY.key,
+    model: state.cfg.chatModel,
+    messages: [
+      { role: 'system', content: DISTILL_SYSTEM },
+      { role: 'user', content: `${known}最近对话：\n${recent}` }
+    ],
+    temperature: 0,
+    timeoutMs: 20000
+  });
+  if (!r.ok) return;
+
+  // 容忍模型加代码块围栏或前后废话，把第一个 [...] 抠出来
+  const m = r.text.match(/\[[\s\S]*\]/);
+  if (!m) return;
+  let arr;
+  try {
+    arr = JSON.parse(m[0]);
+  } catch {
+    return;
+  }
+  if (!Array.isArray(arr) || !arr.length) {
+    // 没抽到新东西也要更新时间戳，否则下一条消息又会重试一次
+    await saveProfile(userId, { ...profile, lastDistillAt: now });
+    return;
+  }
+
+  const facts = mergeFacts(profile.facts, arr);
+  await saveProfile(userId, { facts, lastDistillAt: now });
+  const added = facts.length - profile.facts.length;
+  log(`  [档案] 事实 ${profile.facts.length} → ${facts.length} 条${added > 0 ? `（新增 ${added}）` : ''}`);
+}
+
 async function handleWithDsh(state, msg, text) {
   const userId = msg.from_user_id;
 
@@ -707,6 +783,17 @@ async function handleWithDsh(state, msg, text) {
     }
   }
 
+  // ── 长期事实档案 ──────────────────────────────────────────────────
+  // 跨天还记得"他胃不好""他学软件"的，靠的就是这一块。
+  // 一条都没记过时返回空串，不会给 prompt 添噪音。
+  let profileBlock = '';
+  try {
+    const learned = await loadProfile(userId);
+    profileBlock = buildProfileBlock(learned);
+  } catch (e) {
+    warn('  [档案] 读取失败: ' + e.message);
+  }
+
   // 本轮动态上下文：场景 + 情绪 + 知识库 + 搜索结果 + 链接 + 句式随机。
   // 注意：不拼进 persona.prompt，走 buildChatMessages 的 dynamicContext，
   // 这样人格那段 system 前缀保持稳定、能吃上缓存。
@@ -716,6 +803,9 @@ async function handleWithDsh(state, msg, text) {
   const dynamicContext = [
     moodBlock(userId),
     sceneBlock,
+    // 长期事实放在场景之后：场景是"此刻在聊什么"，档案是"他一直是什么样的人"，
+    // 具体的事优先，背景信息兜底。
+    profileBlock,
     imageBlock,
     linkBlock,
     ragBlock,
@@ -925,6 +1015,10 @@ async function handleWithDsh(state, msg, text) {
 
     await sendBubbles(state, userId, finalBubbles, stickerNames);
 
+    // 发完了再慢慢整理"关于他的事实"，不占他等回复的时间。
+    // 不 await，失败也只打一行日志。
+    distillProfile(state, userId).catch((e) => warn('  [档案] 抽取异常: ' + e.message));
+
     // 记进历史的是一条完整的文本。
     //
     // 注意：以前这里会追加「[发了表情包：X]」当占位，结果模型在下一轮
@@ -967,6 +1061,34 @@ async function handleWithDsh(state, msg, text) {
  * 表情包不单独成"轮"，而是混在聊天气泡之间 —— 真人也是这么发的：
  * 一句话、一个表情、再一句话。
  */
+/**
+ * 算出两条气泡之间该停多久。
+ *
+ * fixed 模式：直接用配置里的 bubbleGapMs（旧行为）。
+ * typing 模式：把"下一条有多长"折算成打字时间 —— 打「嗯」几乎立刻发出去，
+ *              打一整句要停两三秒。真人就是这个节奏，固定间隔会显得在匀速播报。
+ *
+ * 不算的：拼音输入法的联想、删改重打、分心看别的。这些都只能靠随机抖动近似。
+ */
+function gapBeforeBubble(text, cfg) {
+  if (String(cfg.bubbleGapMode || 'fixed') !== 'typing') {
+    const base = cfg.bubbleGapMs;
+    const jitter = base * 0.4 * (Math.random() * 2 - 1);
+    return Math.max(250, Math.round(base + jitter));
+  }
+  // 按"人眼看到的字数"算，emoji/颜文字也只算 1 个字，不按 UTF-16 长度
+  const chars = [...String(text || '')].length;
+  const cps = Math.max(1, Number(cfg.typingCharsPerSec) || 7);
+  const min = Math.max(120, Number(cfg.bubbleGapMinMs) || 450);
+  const max = Math.max(min, Number(cfg.bubbleGapMaxMs) || 4500);
+  // 固定成本 ≈ 抬手、看一眼输入框；之后按字累加
+  const raw = 280 + (chars * 1000) / cps;
+  const base = Math.min(max, Math.max(min, raw));
+  // 真实打字的方差比固定模式大，用 ±30% 抖动
+  const jitter = base * 0.3 * (Math.random() * 2 - 1);
+  return Math.max(150, Math.round(base + jitter));
+}
+
 async function sendBubbles(state, userId, bubbles, stickerNames = []) {
   // 表情包插在倒数第二条之后（也就是正文说完了、还没收尾的位置），
   // 只有一条时插在最后。这样不会一上来就发表情。
@@ -981,9 +1103,8 @@ async function sendBubbles(state, userId, bubbles, stickerNames = []) {
   for (let i = 0; i < bubbles.length; i++) {
     if (i > 0) {
       await tryTyping(state, userId, true);
-      const base = state.cfg.bubbleGapMs;
-      const jitter = base * 0.4 * (Math.random() * 2 - 1);
-      await delay(Math.max(250, Math.round(base + jitter)));
+      // 停顿按"这一条要打多少字"算，而不是固定值
+      await delay(gapBeforeBubble(bubbles[i], state.cfg));
     }
     await sendText(state, userId, bubbles[i]);
 

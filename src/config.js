@@ -69,6 +69,23 @@ const DEFAULTS = {
   bubbleGapMs: 900,
 
   /**
+   * 气泡间隔模式：
+   *   typing = 按"下一条有多长"折算成打字时间（默认，真人打长句就是要更久）
+   *   fixed  = 一律用 bubbleGapMs（旧行为，留着可回退）
+   *
+   * 为什么要有这个：固定间隔下，打「嗯」和打 20 个字停顿一模一样，
+   * 连着发几条时节奏感是"机器在匀速播报"，这是最容易露馅的地方之一。
+   */
+  bubbleGapMode: 'typing',
+
+  /** typing 模式：模拟手机打字速度（字/秒）。真人约 5~8，取 7 */
+  typingCharsPerSec: 7,
+
+  /** typing 模式：停顿的下限 / 上限（毫秒）。下限保证有"抬手"的间隙，上限防止长句把节奏拖僵 */
+  bubbleGapMinMs: 450,
+  bubbleGapMaxMs: 4500,
+
+  /**
    * 回复多长才值得拆。设 0 表示只要有分段就拆（粘人模式用）。
    * 默认 40：太短的一律不拆，避免"好的呀"被切成三段。
    */
@@ -171,6 +188,18 @@ const DEFAULTS = {
 
   /** 场景多久没动静就算过期（分钟）。过期后下一条消息会开一个新场景 */
   sceneTtlMinutes: 180,
+
+  /**
+   * 长期事实档案：把"他胃不好""他学软件"这类跨天该记得的事单独存一份，
+   * 每轮注入几十到几百字。关掉后她就只记得最近几轮对话。
+   */
+  profileEnabled: true,
+
+  /**
+   * 隔多久才重新整理一次档案（分钟）。
+   * 每次整理是一次额外的模型调用，调太小等于白烧钱；30 分钟是个折中。
+   */
+  profileDistillMinutes: 30,
 
   /**
    * 每轮固定注入的画像事实卡字符数（分层注入的第一层）。
@@ -420,6 +449,10 @@ export function ensureConfigFile() {
       bubbleSplit: true,
       maxBubbles: 3,
       bubbleGapMs: 900,
+      bubbleGapMode: 'typing',
+      typingCharsPerSec: 7,
+      bubbleGapMinMs: 450,
+      bubbleGapMaxMs: 4500,
       shortReplyThreshold: 40,
       stickerDir: '',
       allowStickers: true,
@@ -429,6 +462,8 @@ export function ensureConfigFile() {
       proactiveNewTopicMinutes: 180,
       sceneEnabled: true,
       sceneTtlMinutes: 180,
+      profileEnabled: true,
+      profileDistillMinutes: 30,
       sceneProfileChars: 360,
       sceneRecentTopics: 5,
       recentTopicDays: 30,
