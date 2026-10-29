@@ -331,14 +331,54 @@ function pickBubbleCount(last, min = 1, max = 5) {
   return min;
 }
 
-function enqueue(userId, job) {
+function enqueue(userId, job, state = null) {
   const prev = userQueues.get(userId) ?? Promise.resolve();
   const next = prev.then(job).catch((e) => warn('队列任务出错:', e.message));
   userQueues.set(userId, next);
   next.finally(() => {
-    if (userQueues.get(userId) === next) userQueues.delete(userId);
+    if (userQueues.get(userId) === next) {
+      userQueues.delete(userId);
+      // 收尾：处理期间攒下来的话不能凉在那儿，单独起一轮回掉。
+      // 不加这一步，他最后一条会一直没人理 —— 这是最伤的一种"已读不回"。
+      if (state && (inboxBuffer.get(userId)?.texts?.length || 0) > 0) {
+        enqueue(userId, () => drainInbox(state, userId), state);
+      }
+    }
   });
   return next;
+}
+
+/**
+ * 他连着发、上一轮还没回完时的「未读缓冲」。
+ *
+ * 为什么要有：以前是逐条排队、逐条回 —— 他连发三句，她回三段，一段答一句，
+ * 像客服在按工单处理。正常人是一次把三句都看完，然后合成一句回。
+ */
+const inboxBuffer = new Map();   // userId → { texts: string[], msg }
+const INBOX_MAX_MSGS = 8;
+const INBOX_MAX_CHARS = 600;
+
+function queueInbound(userId, text, msg) {
+  const s = String(text || '').trim();
+  if (!s) return;
+  const cur = inboxBuffer.get(userId) || { texts: [], msg };
+  cur.texts.push(s);
+  cur.msg = msg;              // 用最新那条：里面带着最新的 context_token
+  while (cur.texts.length > INBOX_MAX_MSGS) cur.texts.shift();
+  inboxBuffer.set(userId, cur);
+  log(`  [合并] 他还在说，先攒着（${cur.texts.length} 条未读）`);
+}
+
+/** 把攒下来的话合成一轮回掉；没有就返回 false */
+async function drainInbox(state, userId) {
+  const cur = inboxBuffer.get(userId);
+  if (!cur || !cur.texts.length) return false;
+  inboxBuffer.delete(userId);
+  let merged = cur.texts.join('\n');
+  if (merged.length > INBOX_MAX_CHARS) merged = merged.slice(-INBOX_MAX_CHARS);
+  log(`  [合并] ${cur.texts.length} 条并成一轮回：${merged.replace(/\n/g, ' / ').slice(0, 50)}`);
+  await handleWithDsh(state, cur.msg, merged);
+  return true;
 }
 
 /**
@@ -2404,11 +2444,23 @@ async function main() {
               state.handled++;
               continue;
             }
+            // 他连发几句时不要一条一条回 —— 正常人是一次看完、一起回。
+            // 带图片的除外：图片自带上下文，合并没有意义，各走各的。
+            const hasMedia = imageItemsOf(msg).length > 0;
+            if (!hasMedia && userQueues.has(userId) && String(text ?? '').trim()) {
+              queueInbound(userId, text, msg);
+              state.handled++;
+              continue;
+            }
             // 丢进该用户的队列，不阻塞长轮询
             enqueue(userId, async () => {
               await handleWithDsh(state, msg, text);
               state.handled++;
-            });
+              // 处理期间攒下来的话，接着合成一轮（最多三轮，防止无限叠）
+              for (let i = 0; i < 3; i++) {
+                if (!(await drainInbox(state, userId))) break;
+              }
+            }, state);
           } else {
             await sendText(state, userId, `未知模式 ${MODE}`);
           }
