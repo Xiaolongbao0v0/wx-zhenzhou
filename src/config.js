@@ -187,7 +187,14 @@ const DEFAULTS = {
   sceneEnabled: true,
 
   /** 场景多久没动静就算过期（分钟）。过期后下一条消息会开一个新场景 */
-  sceneTtlMinutes: 180,
+  sceneTtlMinutes: 30,
+
+  /**
+   * 场景因"闲太久"过期时，要不要连短期记忆一起清空。
+   * 不清的话，记忆里那几句话还在，模型会把半小时前的事接着往下说 ——
+   * 等于话题只是名义上结束了。清空后他想重提，走知识库/事实档案照样接得上。
+   */
+  historyResetOnIdle: true,
 
   /**
    * 长期事实档案：把"他胃不好""他学软件"这类跨天该记得的事单独存一份，
@@ -492,7 +499,8 @@ export function ensureConfigFile() {
       proactiveMaxMinutes: 150,
       proactiveNewTopicMinutes: 180,
       sceneEnabled: true,
-      sceneTtlMinutes: 180,
+      sceneTtlMinutes: 30,
+      historyResetOnIdle: true,
       profileEnabled: true,
       profileDistillMinutes: 30,
       replyDelayChance: 0.12,

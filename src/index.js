@@ -616,6 +616,20 @@ async function handleWithDsh(state, msg, text) {
 
     if (sceneMode === 'new') {
       const prevTopic = scene?.topic;
+      // 场景是"闲太久自然过期"而不是"他自己换题"时，连短期记忆一起清掉。
+      //
+      // 为什么必须清：记忆里存的最近 6 轮没有时间概念，场景结束了它还在，
+      // 模型照样会把半小时前那件事接着往下说 —— 那样"结束话题"就只结束了个标题。
+      // 清掉之后他想再说，走的是知识库/事实档案那条路，她照样接得上。
+      const expired = /场景过期/.test(sceneReason || '');
+      if (expired && state.cfg.historyResetOnIdle !== false) {
+        try {
+          await clearHistory(userId);
+          log('  [场景] 闲太久，短期记忆一并清空（想再说可以问我）');
+        } catch (e) {
+          warn('  [场景] 清历史失败: ' + e.message);
+        }
+      }
       scene = createScene(text, { source: 'user' });
       log(`  [场景] 新场景「${scene.topic}」${prevTopic ? `（上一件：${prevTopic}）` : ''}`);
     } else {
